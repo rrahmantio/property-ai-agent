@@ -1,20 +1,23 @@
 """
 Phase 1: research.
 
-Uses Claude with the web_search tool to pull current Jakarta/Jabodetabek
+Uses OpenAI's web search tool (Responses API) to pull current Jakarta/Jabodetabek
 property and lifestyle information, prioritising:
   1. Government / official sources
   2. Official company announcements
   3. Reputable Indonesian media
   4. Reputable property sources
 
-Returns a list of research notes, each with the claim and its source(s),
-so content_generation.py can ground concepts in real citations instead
-of inventing statistics.
+Two-step process:
+  1. Responses API + web_search_preview tool -> raw findings text (with sources).
+  2. Chat Completions in JSON mode -> structure that text into a list of notes.
+
+This keeps JSON reliability high without depending on strict-JSON + tool-use
+being combinable in a single call.
 """
 import json
 
-import anthropic
+from openai import OpenAI
 
 import config
 
@@ -29,65 +32,73 @@ RESEARCH_TOPICS = [
     "neighbourhood developments Jabodetabek",
 ]
 
-SYSTEM_PROMPT = """You are a research assistant for a Jakarta property content agent.
-Your only job is to find CURRENT, VERIFIABLE facts about Jakarta/Jabodetabek property,
-infrastructure, and lifestyle topics, using web search.
+SEARCH_INSTRUCTIONS = """You are a research assistant for a Jakarta property content agent.
+Find CURRENT, VERIFIABLE facts about Jakarta/Jabodetabek property, infrastructure, and
+lifestyle topics.
 
 Rules:
 - Prioritise official/government sources, official company announcements, reputable
   Indonesian media, and reputable property publications, in that order.
 - Never invent statistics, prices, infrastructure timelines, or distances.
-- For every fact you report, note where it came from (publication/source name) and
-  roughly when (date if available).
+- For every fact, note where it came from (publication/source name) and roughly when.
 - If you cannot verify something, do not include it.
 
-Output ONLY valid JSON: a list of objects with fields
-  "topic", "fact", "source", "date_or_recency", "url"
-Nothing else — no preamble, no markdown fences.
-"""
+Write your findings as plain text notes, one fact per line, including the source and
+approximate date for each."""
+
+STRUCTURE_SYSTEM_PROMPT = """Convert the research notes below into structured JSON.
+
+Output a JSON object with a single key "notes", a list of objects with fields:
+  "topic", "fact", "source", "date_or_recency", "url" (url can be "" if not given).
+
+Only include facts that already have a clear source in the input — do not invent or
+add anything not present in the input text."""
 
 
 def _client():
-    return anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    return OpenAI(api_key=config.OPENAI_API_KEY)
 
 
 def research_jakarta_topics(topics=None, max_notes=25):
-    """
-    Runs one Claude call with the web_search tool covering the topic list,
-    and returns a parsed list of research note dicts.
-    """
     topics = topics or RESEARCH_TOPICS
     client = _client()
 
-    user_prompt = (
+    search_prompt = (
         "Research current information on the following Jakarta/Jabodetabek topics:\n- "
         + "\n- ".join(topics)
-        + f"\n\nReturn up to {max_notes} of the most relevant, recent, verifiable facts "
-        "as the JSON format described in your instructions."
+        + f"\n\nReturn up to {max_notes} of the most relevant, recent, verifiable facts."
     )
 
-    response = client.messages.create(
-        model=config.ANTHROPIC_MODEL,
-        max_tokens=4000,
-        system=SYSTEM_PROMPT,
-        tools=[{"type": "web_search_20250305", "name": "web_search"}],
-        messages=[{"role": "user", "content": user_prompt}],
+    # Step 1: web-search-grounded findings.
+    search_response = client.responses.create(
+        model=config.OPENAI_MODEL,
+        tools=[{"type": "web_search_preview"}],
+        instructions=SEARCH_INSTRUCTIONS,
+        input=search_prompt,
     )
+    raw_findings = (search_response.output_text or "").strip()
 
-    # Collect the final text block(s) — the model may interleave tool_use /
-    # tool_result blocks with text; we only want the concluding JSON text.
-    text_parts = [block.text for block in response.content if getattr(block, "type", None) == "text"]
-    raw = "\n".join(text_parts).strip()
-    raw = raw.replace("```json", "").replace("```", "").strip()
+    if not raw_findings:
+        return []
+
+    # Step 2: structure into JSON.
+    structure_response = client.chat.completions.create(
+        model=config.OPENAI_MODEL,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": STRUCTURE_SYSTEM_PROMPT},
+            {"role": "user", "content": raw_findings},
+        ],
+    )
 
     try:
-        notes = json.loads(raw)
+        data = json.loads(structure_response.choices[0].message.content)
+        notes = data.get("notes", [])
         if isinstance(notes, list):
             return notes
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, AttributeError):
         pass
 
-    # Fall back to an empty list rather than crashing the daily job —
-    # content_generation will simply have less grounding material, and
-    # concepts should lean on framed opinion rather than fabricated stats.
+    # Fall back to an empty list rather than crashing the daily job — concepts
+    # will lean on framed opinion instead of fabricated stats.
     return []

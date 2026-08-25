@@ -18,8 +18,8 @@ def _require(name: str, allow_empty_in_ci: bool = False) -> str:
 
 
 # --- LLM ---
-ANTHROPIC_API_KEY = _require("ANTHROPIC_API_KEY")
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
+OPENAI_API_KEY = _require("OPENAI_API_KEY")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
 
 # --- Threads (Meta Graph API) ---
 THREADS_ACCESS_TOKEN = _require("THREADS_ACCESS_TOKEN")

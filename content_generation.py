@@ -7,10 +7,14 @@ Follows the HOZ Property AI Content Agent V1 spec:
   - select the best 3-4
   - write each as a 4-7 part Threads text chain
   - run a quality check against the reject-list
+
+Uses OpenAI Chat Completions in JSON mode. JSON mode requires a top-level
+JSON *object*, so every prompt asks for a named key wrapping the list
+(e.g. {"concepts": [...]}) and _call_json unwraps it.
 """
 import json
 
-import anthropic
+from openai import OpenAI
 
 import config
 
@@ -56,20 +60,23 @@ VOICE = ('Natural Indonesian, Jakarta-aware, insightful, conversational. Think: 
 
 
 def _client():
-    return anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    return OpenAI(api_key=config.OPENAI_API_KEY)
 
 
-def _call_json(system: str, user: str, max_tokens: int = 4000):
+def _call_json(system: str, user: str, key: str):
+    """Calls OpenAI in JSON mode and returns the list stored under `key`."""
     client = _client()
-    response = client.messages.create(
-        model=config.ANTHROPIC_MODEL,
-        max_tokens=max_tokens,
-        system=system,
-        messages=[{"role": "user", "content": user}],
+    response = client.chat.completions.create(
+        model=config.OPENAI_MODEL,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
     )
-    raw = "".join(b.text for b in response.content if getattr(b, "type", None) == "text").strip()
-    raw = raw.replace("```json", "").replace("```", "").strip()
-    return json.loads(raw)
+    data = json.loads(response.choices[0].message.content)
+    result = data.get(key, [])
+    return result if isinstance(result, list) else []
 
 
 # ---------- 1. concept generation ----------
@@ -92,14 +99,14 @@ Each concept must have exactly these fields:
   title, target_audience, content_pillar, hook, core_insight, why_interesting,
   property_connection, research_sources (list of source names/urls used, [] if none)
 
-Output ONLY a JSON list of these concept objects. No preamble, no markdown fences."""
+Output a JSON object: {{"concepts": [ ...concept objects... ]}}"""
 
     user = json.dumps({
         "research_notes": research_notes,
         "recent_history": recent_history,
     }, ensure_ascii=False)
 
-    return _call_json(system, user)
+    return _call_json(system, user, key="concepts")
 
 
 # ---------- 2. scoring ----------
@@ -114,10 +121,10 @@ For each concept in the input list, return an object with:
   title, scores (object with the 6 criteria as keys, 0-10 each), weighted_total (0-10,
   computed using the weights above), rationale (1 sentence)
 
-Output ONLY a JSON list, same order as input concepts. No preamble, no markdown fences."""
+Output a JSON object: {{"scores": [ ...score objects, same order as input... ]}}"""
 
     user = json.dumps(concepts, ensure_ascii=False)
-    scored = _call_json(system, user)
+    scored = _call_json(system, user, key="scores")
 
     # Attach scores back onto the original concept objects for downstream use.
     by_title = {s["title"]: s for s in scored}
@@ -157,10 +164,10 @@ For each concept, output an object with:
   title, audience (=target_audience), pillar (=content_pillar), hook,
   thread_posts (ordered list of strings, one per Threads post, 4-7 items total)
 
-Output ONLY a JSON list, one object per input concept. No preamble, no markdown fences."""
+Output a JSON object: {{"chains": [ ...one object per input concept... ]}}"""
 
     user = json.dumps(selected_concepts, ensure_ascii=False)
-    return _call_json(system, user)
+    return _call_json(system, user, key="chains")
 
 
 # ---------- 4. quality check ----------
@@ -179,10 +186,10 @@ Voice should be: {VOICE}
 For each chain, return an object with: title, passes (true/false), issues (list of strings,
 empty if passes=true).
 
-Output ONLY a JSON list, same order as input. No preamble, no markdown fences."""
+Output a JSON object: {{"verdicts": [ ...one per input chain, same order... ]}}"""
 
     user = json.dumps(chains, ensure_ascii=False)
-    verdicts = _call_json(system, user)
+    verdicts = _call_json(system, user, key="verdicts")
 
     by_title = {v["title"]: v for v in verdicts}
     passed = []

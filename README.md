@@ -25,6 +25,26 @@ an email.
    (Render, Fly.io, Railway, a cheap VPS — anywhere with a public URL).
    GitHub Actions itself cannot host it.
 
+## Secrets: where each one actually lives
+
+`.env` and GitHub Secrets aren't two options for the same thing — they cover
+two different runtimes:
+
+- **`.env`** — read only when you run `daily_job.py` or `approval_app.py` on
+  your own machine, for local testing. `.gitignore` keeps it out of the repo;
+  it never reaches GitHub.
+- **GitHub Actions secrets** — what `daily_job.py` actually uses in
+  production, once it's running on the schedule in
+  `.github/workflows/daily-content.yml`. Set these under repo
+  **Settings → Secrets and variables → Actions**; the workflow reads them
+  into env vars at run time and they're never written into any file.
+- **Your deployment host's env vars** — wherever `approval_app.py` ends up
+  running (Render/Fly/etc.), set the same values there via that platform's
+  own secrets/env var settings.
+
+So locally you use `.env`; once it's live, GitHub Secrets + your host's
+env vars are the only places any real key or token exists.
+
 ## Setup
 
 ```bash
@@ -35,7 +55,8 @@ python -c "import storage; storage.init_db()"
 ```
 
 Required values in `.env` (see `.env.example` for the full list):
-- `ANTHROPIC_API_KEY` — your Claude API key
+- `OPENAI_API_KEY` — your OpenAI API key
+- `OPENAI_MODEL` — defaults to `gpt-4.1-mini`, override with any equivalent-tier model
 - `THREADS_ACCESS_TOKEN`, `THREADS_USER_ID` — Threads (Meta Graph API) creds
 - `EMAIL_USER` / `EMAIL_PASSWORD` / `EMAIL_TO` — SMTP creds for the approval email
   (Gmail: use an [app password](https://myaccount.google.com/apppasswords), not your login password)
@@ -76,7 +97,8 @@ daily email is built with the right links).
 (Settings → Secrets and variables → Actions):
 
 ```
-ANTHROPIC_API_KEY
+OPENAI_API_KEY
+OPENAI_MODEL          (optional — defaults to gpt-4.1-mini if unset)
 THREADS_ACCESS_TOKEN
 THREADS_USER_ID
 TYPEFORM_URL
