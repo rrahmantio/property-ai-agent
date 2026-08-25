@@ -1,0 +1,46 @@
+name: HOZ Property Daily Content
+
+on:
+  schedule:
+    # 09:00 WIB = 02:00 UTC, every day
+    - cron: "0 2 * * *"
+  workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
+
+jobs:
+  generate-and-email:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore content history DB
+        uses: actions/cache@v4
+        with:
+          path: data/hoz_agent.db
+          key: hoz-agent-db-${{ github.run_id }}
+          restore-keys: |
+            hoz-agent-db-
+
+      - name: Run daily content job
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
+          TYPEFORM_URL: ${{ secrets.TYPEFORM_URL }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          APPROVAL_SECRET: ${{ secrets.APPROVAL_SECRET }}
+          APPROVAL_BASE_URL: ${{ secrets.APPROVAL_BASE_URL }}
+        run: python daily_job.py
+
+      # NOTE: SQLite on GitHub Actions runners is ephemeral. The cache step
+      # above is a stopgap so history persists run-to-run. For anything
+      # production-grade, point DB_PATH at a small persistent volume on
+      # whatever host runs approval_app.py instead (see README).
